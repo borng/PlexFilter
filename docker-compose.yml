@@ -1,0 +1,14 @@
+services:
+  plexfilter:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - plexfilter-data:/data
+    environment:
+      - PLEXFILTER_PLEX_URL=${PLEX_URL:-http://host.docker.internal:32400}
+      - PLEXFILTER_PLEX_TOKEN=${PLEX_TOKEN}
+    restart: unless-stopped
+
+volumes:
+  plexfilter-data:
