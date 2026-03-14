@@ -4,6 +4,7 @@ from fastapi import APIRouter, BackgroundTasks, HTTPException
 
 from ..config import settings
 from ..services.plex_scanner import scan_plex
+from ..services.local_detection import LocalDetectionService
 from ..services.sync import SyncService
 
 router = APIRouter(prefix="/api", tags=["sync"])
@@ -15,6 +16,8 @@ _sync_status: dict = {
     "total": 0,
     "results": [],
     "error": None,
+    "local_fallback_count": 0,
+    "last_action": "",
 }
 
 
@@ -26,6 +29,8 @@ def _run_sync():
     _sync_status["total"] = 0
     _sync_status["results"] = []
     _sync_status["error"] = None
+    _sync_status["local_fallback_count"] = 0
+    _sync_status["last_action"] = "starting"
 
     try:
         svc = SyncService()
@@ -33,9 +38,42 @@ def _run_sync():
         def on_progress(current: int, total: int):
             _sync_status["current"] = current
             _sync_status["total"] = total
+            _sync_status["last_action"] = f"synced {current}/{total}"
 
-        results = svc.sync_all(on_progress=on_progress)
+        def on_detail_progress(current: int, total: int, event: dict):
+            _sync_status["current"] = current
+            _sync_status["total"] = total
+
+            title = event.get("title")
+            status = event.get("status") or "processing"
+            frames_done = event.get("frames_done")
+            frames_total = event.get("frames_total")
+            frames_flagged = event.get("frames_flagged")
+            hit_count = event.get("hit_count")
+            segment_count = event.get("segment_count")
+
+            if isinstance(frames_done, int) and isinstance(frames_total, int) and frames_total > 0:
+                detail = f"{status} {frames_done}/{frames_total}"
+            elif isinstance(frames_flagged, int) and isinstance(frames_total, int) and frames_total > 0:
+                detail = f"{status} flagged {frames_flagged}/{frames_total}"
+            elif isinstance(hit_count, int):
+                detail = f"{status} hits={hit_count}"
+            elif isinstance(segment_count, int):
+                detail = f"{status} segments={segment_count}"
+            else:
+                detail = status
+
+            if title:
+                _sync_status["last_action"] = f"{title}: {detail}"
+            else:
+                _sync_status["last_action"] = detail
+
+        results = svc.sync_all(on_progress=on_progress, on_detail_progress=on_detail_progress)
         _sync_status["results"] = results
+        _sync_status["local_fallback_count"] = len(
+            [r for r in results if r.get("source") == "local"]
+        )
+        _sync_status["last_action"] = "completed"
     except Exception as exc:
         _sync_status["error"] = str(exc)
     finally:
@@ -56,6 +94,15 @@ def sync_single(library_id: int):
     """Sync a single library item (foreground)."""
     svc = SyncService()
     result = svc.sync_library_item(library_id)
+    return result
+
+
+@router.post("/local-detection/{library_id}")
+def local_detect_single(library_id: int):
+    """Run local nudity detection for one title regardless of VidAngel match."""
+    result = LocalDetectionService().detect_library_item(library_id)
+    if not result.get("matched"):
+        raise HTTPException(status_code=400, detail=result.get("error", "local detection failed"))
     return result
 
 

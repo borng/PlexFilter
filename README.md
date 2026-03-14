@@ -15,7 +15,7 @@ Your Plex Library → PlexFilter scans it → Matches titles to VidAngel catalog
 ```
 
 1. **Scan** — Connects to your Plex server, catalogs movies with TMDB/IMDB IDs
-2. **Sync** — Searches VidAngel's public (unauthenticated) API for each title, downloads timestamped filter tags
+2. **Sync** — Searches VidAngel's public (unauthenticated) API for each title, downloads timestamped filter tags. If no VidAngel match is found, falls back to **local nudity detection** using NudeNet (with optional Freepik fast-pass classifier)
 3. **Filter** — Create profiles with three-level granularity:
    - **Group level**: Toggle all Language, all Nudity, all Violence
    - **Category level**: Toggle specific categories (f-word, Gore, Female Nudity, etc.)
@@ -75,6 +75,12 @@ Environment variables (or `.env` file in `backend/`):
 | `PLEXFILTER_PLEX_TOKEN` | | Plex authentication token |
 | `PLEXFILTER_DATABASE_PATH` | `plexfilter.db` | SQLite database path |
 | `PLEXFILTER_PLEXAUTOSKIP_JSON_PATH` | `custom.json` | Output path for PlexAutoSkip |
+| `PLEXFILTER_LOCAL_DETECTION_ENABLED` | `true` | Enable NudeNet local fallback when VidAngel has no match |
+| `PLEXFILTER_LOCAL_DETECTION_SAMPLE_INTERVAL_SEC` | `1.0` | Frame sampling interval for local detection |
+| `PLEXFILTER_LOCAL_DETECTION_NUDENET_THRESHOLD` | `0.55` | NudeNet confidence threshold (0-1) |
+| `PLEXFILTER_LOCAL_DETECTION_STAGE1_MODEL` | `freepik` | Stage-1 classifier model (`freepik` or `none`) |
+| `PLEXFILTER_LOCAL_DETECTION_STAGE1_MIN_VRAM_GB` | `3.5` | Minimum GPU VRAM required to enable stage-1 classifier |
+| `PLEXFILTER_LOCAL_DETECTION_STAGE1_REQUIRE_BF16` | `false` | Require BF16 support for stage-1 classifier |
 
 **Getting your Plex token:** Open Plex Web, inspect any API request, find `X-Plex-Token` in the URL.
 
@@ -114,6 +120,11 @@ Point PlexAutoSkip's `custom_json` config at the same file PlexFilter writes to.
 │  │ Plex     │  │ VidAngel  │  │ PlexAutoSkip     │  │
 │  │ Scanner  │  │ Sync      │  │ JSON Generator   │  │
 │  └────┬─────┘  └─────┬─────┘  └────────┬─────────┘  │
+│       │        ┌──────┴──────┐          │            │
+│       │        │ Local       │          │            │
+│       │        │ Detection   │(fallback)│            │
+│       │        │ (NudeNet)   │          │            │
+│       │        └──────┬──────┘          │            │
 │       │              │                  │            │
 │  ┌────▼──────────────▼──────────────────▼─────────┐  │
 │  │              SQLite Database                    │  │
@@ -128,7 +139,7 @@ Point PlexAutoSkip's `custom_json` config at the same file PlexFilter writes to.
 
 ## Tech Stack
 
-- **Backend:** Python 3.12, FastAPI, SQLite, python-plexapi, httpx
+- **Backend:** Python 3.12, FastAPI, SQLite, python-plexapi, httpx, NudeNet (ONNX), OpenCV
 - **Frontend:** React 18, Vite, Tailwind CSS, TanStack React Query
 - **External:** PlexAutoSkip (separate process), Plex Media Server
 
@@ -146,6 +157,7 @@ Point PlexAutoSkip's `custom_json` config at the same file PlexFilter writes to.
 | GET | `/api/categories` | VidAngel category tree (cached) |
 | POST | `/api/sync` | Start background sync of all titles |
 | POST | `/api/sync/{id}` | Sync single title |
+| POST | `/api/local-detection/{id}` | Force local nudity detection for one title |
 | GET | `/api/sync/status` | Sync progress |
 | POST | `/api/generate` | Generate custom.json |
 | GET | `/api/generate/preview/{id}` | Preview what would be filtered |
@@ -162,9 +174,9 @@ PlexFilter exposes the big three category groups for v1:
 
 VidAngel provides 147 categories total across Language, Sex, Nudity, Violence, Substance, Kissing, Medical, and Credits. All are stored in the database; the UI currently surfaces Language, Nudity, Sex, and Violence.
 
-## Data Source
+## Data Sources
 
-All filter data comes from [VidAngel's public API](https://api.vidangel.com/api/). No authentication required. Tags include:
+**VidAngel (primary):** All filter data comes from [VidAngel's public API](https://api.vidangel.com/api/). No authentication required. Tags include:
 
 - Second-level timestamps (`start_approx`, `end_approx`)
 - Human-written descriptions ("A man says the f-word while pointing a gun")
@@ -173,6 +185,13 @@ All filter data comes from [VidAngel's public API](https://api.vidangel.com/api/
 
 See the [VidAngel extractor project](../va/) for API documentation and discovery process.
 
+**Local Detection (fallback):** When a title isn't in VidAngel's catalog, PlexFilter can analyze the video directly using a two-stage pipeline:
+
+1. **Stage 1 — Freepik classifier** (optional, requires GPU): Fast frame-level NSFW classification (neutral/low/medium/high) to filter out clean frames
+2. **Stage 2 — NudeNet detector** (ONNX, works on CPU): Object detection identifying specific body parts (18 labels) mapped to PlexFilter nudity categories
+
+The pipeline extracts frames via ffmpeg, runs detection, merges adjacent hits into skip segments, and stores them as tags in the same format as VidAngel data — so existing filter profiles and the PlexAutoSkip generator work without modification. See [detection model research](docs/local-detection-research.md) for model comparison details.
+
 ## Tests
 
 ```bash
@@ -180,12 +199,12 @@ cd backend
 python -m pytest tests/ -v
 ```
 
-27 tests covering: VidAngel API client, Plex scanner, profile management with three-level filter resolution, PlexAutoSkip JSON generator with segment merging, and an end-to-end smoke test running the full pipeline.
+33 tests covering: VidAngel API client, Plex scanner, profile management with three-level filter resolution, PlexAutoSkip JSON generator with segment merging, local detection pipeline (fallback integration, stage-1 GPU checks, progress events), and an end-to-end smoke test running the full pipeline.
 
 ## Future Enhancements
 
 - TV show support (VidAngel has episode-level tags)
-- Fallback pipeline: WhisperX for profanity + NudeNet for nudity detection
+- Local fallback profanity pipeline (WhisperX research pending)
 - Per-Plex-user profile mapping
 - Authentication for remote access
 - Auto-sync on Plex library webhook events

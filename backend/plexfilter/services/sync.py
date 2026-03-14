@@ -7,7 +7,9 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from ..database import get_db
+from ..config import settings
 from . import vidangel
+from .local_detection import LocalDetectionService
 
 
 class SyncService:
@@ -33,7 +35,11 @@ class SyncService:
     # Single-item sync
     # ------------------------------------------------------------------
 
-    def sync_library_item(self, library_id: int) -> dict[str, Any]:
+    def sync_library_item(
+        self,
+        library_id: int,
+        on_detail_progress: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
         """Match a single library row to VidAngel and store tags.
 
         Returns a result dict:
@@ -41,6 +47,13 @@ class SyncService:
             or
             {"matched": False, "error": "reason"}
         """
+        return self._sync_library_item(library_id, on_detail_progress=on_detail_progress)
+
+    def _sync_library_item(
+        self,
+        library_id: int,
+        on_detail_progress: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
         db = get_db()
         try:
             row = db.execute(
@@ -59,11 +72,19 @@ class SyncService:
         try:
             search_resp = vidangel.search_works(title)
         except Exception as exc:
-            return {"matched": False, "error": f"search failed: {exc}"}
+            return self._fallback_to_local(
+                library_id=library_id,
+                reason=f"search failed: {exc}",
+                on_detail_progress=on_detail_progress,
+            )
 
         results = search_resp.get("results", [])
         if not results:
-            return {"matched": False, "error": f"no VidAngel results for '{title}'"}
+            return self._fallback_to_local(
+                library_id=library_id,
+                reason=f"no VidAngel results for '{title}'",
+                on_detail_progress=on_detail_progress,
+            )
 
         # --- Match by year, fallback to first result ---
         work = results[0]
@@ -79,7 +100,11 @@ class SyncService:
         try:
             detail = vidangel.get_movie_detail(work_id)
         except Exception as exc:
-            return {"matched": False, "error": f"movie detail failed: {exc}"}
+            return self._fallback_to_local(
+                library_id=library_id,
+                reason=f"movie detail failed: {exc}",
+                on_detail_progress=on_detail_progress,
+            )
 
         offerings = detail.get("offerings", [])
         tag_set_id: int | None = None
@@ -90,13 +115,21 @@ class SyncService:
                 break
 
         if tag_set_id is None:
-            return {"matched": False, "error": "no tag_set_id in offerings"}
+            return self._fallback_to_local(
+                library_id=library_id,
+                reason="no tag_set_id in offerings",
+                on_detail_progress=on_detail_progress,
+            )
 
         # --- Fetch tag set and enrich ---
         try:
             tag_set_resp = vidangel.get_tag_set(tag_set_id)
         except Exception as exc:
-            return {"matched": False, "error": f"tag set fetch failed: {exc}"}
+            return self._fallback_to_local(
+                library_id=library_id,
+                reason=f"tag set fetch failed: {exc}",
+                on_detail_progress=on_detail_progress,
+            )
 
         raw_tags = tag_set_resp.get("tags", [])
         enriched = vidangel.enrich_tags(raw_tags, self.cat_map)
@@ -108,16 +141,25 @@ class SyncService:
             db.execute(
                 """
                 INSERT INTO matches (library_id, vidangel_work_id, tag_set_id,
-                                     match_method, tag_count, last_synced)
-                VALUES (?, ?, ?, ?, ?, ?)
+                                     source, match_method, tag_count, last_synced)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(library_id) DO UPDATE SET
                     vidangel_work_id = excluded.vidangel_work_id,
                     tag_set_id       = excluded.tag_set_id,
+                    source           = excluded.source,
                     match_method     = excluded.match_method,
                     tag_count        = excluded.tag_count,
                     last_synced      = excluded.last_synced
                 """,
-                (library_id, work_id, tag_set_id, "title+year", len(enriched), now),
+                (
+                    library_id,
+                    work_id,
+                    tag_set_id,
+                    "vidangel",
+                    "title+year",
+                    len(enriched),
+                    now,
+                ),
             )
 
             # --- Upsert tags (UNIQUE on vidangel_id) ---
@@ -159,6 +201,7 @@ class SyncService:
             "matched": True,
             "tag_count": len(enriched),
             "tag_set_id": tag_set_id,
+            "source": "vidangel",
         }
 
     # ------------------------------------------------------------------
@@ -168,6 +211,7 @@ class SyncService:
     def sync_all(
         self,
         on_progress: Callable[[int, int], None] | None = None,
+        on_detail_progress: Callable[[int, int, dict[str, Any]], None] | None = None,
     ) -> list[dict[str, Any]]:
         """Sync every library item.  Returns a list of per-item result dicts.
 
@@ -184,7 +228,11 @@ class SyncService:
         results: list[dict[str, Any]] = []
 
         for idx, row in enumerate(rows, start=1):
-            result = self.sync_library_item(row["id"])
+            detail_callback: Callable[[dict[str, Any]], None] | None = None
+            if on_detail_progress is not None:
+                detail_callback = lambda event, cur=idx: on_detail_progress(cur, total, event)
+
+            result = self._sync_library_item(row["id"], on_detail_progress=detail_callback)
             results.append(result)
 
             if on_progress is not None:
@@ -194,3 +242,27 @@ class SyncService:
                 time.sleep(0.5)
 
         return results
+
+    @staticmethod
+    def _fallback_to_local(
+        library_id: int,
+        reason: str,
+        on_detail_progress: Callable[[dict[str, Any]], None] | None = None,
+    ) -> dict[str, Any]:
+        if not settings.local_detection_enabled:
+            return {"matched": False, "error": reason}
+
+        try:
+            local_result = LocalDetectionService().detect_library_item(
+                library_id,
+                on_progress=on_detail_progress,
+            )
+        except Exception as exc:
+            return {
+                "matched": False,
+                "error": reason,
+                "fallback_error": f"local detection failed: {exc}",
+            }
+
+        local_result["fallback_reason"] = reason
+        return local_result
