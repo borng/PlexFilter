@@ -5,7 +5,20 @@ async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { 'Content-Type': 'application/json' },
     ...init,
   })
-  return res.json()
+  const contentType = res.headers.get('content-type') || ''
+  const isJson = contentType.includes('application/json')
+  const payload = isJson ? await res.json() : undefined
+
+  if (!res.ok) {
+    const detail = payload && typeof payload === 'object' ? (payload as any).detail : undefined
+    const message = typeof detail === 'string' ? detail : `${res.status} ${res.statusText}`
+    throw new Error(message)
+  }
+
+  if (res.status === 204) {
+    return undefined as T
+  }
+  return payload as T
 }
 
 export const api = {
@@ -24,10 +37,11 @@ export const api = {
   sync: () => fetchJSON<any>('/sync', { method: 'POST' }),
   syncStatus: () => fetchJSON<any>('/sync/status'),
   syncSingle: (id: number) => fetchJSON<any>(`/sync/${id}`, { method: 'POST' }),
+  localDetectSingle: (id: number) => fetchJSON<any>(`/local-detection/${id}`, { method: 'POST' }),
   generate: (profileId = 1) =>
     fetchJSON<any>(`/generate?profile_id=${profileId}`, { method: 'POST' }),
   preview: (profileId: number) => fetchJSON<any>(`/generate/preview/${profileId}`),
   plexConnect: (url: string, token: string) =>
-    fetchJSON<any>(`/plex/connect?url=${encodeURIComponent(url)}&token=${encodeURIComponent(token)}`, { method: 'POST' }),
+    fetchJSON<any>(`/plex/connect?plex_url=${encodeURIComponent(url)}&plex_token=${encodeURIComponent(token)}`, { method: 'POST' }),
   plexScan: () => fetchJSON<any>('/plex/scan', { method: 'POST' }),
 }

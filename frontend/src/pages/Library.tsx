@@ -5,8 +5,9 @@ interface LibraryItem {
   id: number
   title: string
   year: number | null
-  thumb: string | null
-  va_match: boolean
+  thumb_url: string | null
+  matched: number
+  source?: string | null
 }
 
 export default function Library({ onSelect }: { onSelect: (id: number) => void }) {
@@ -33,7 +34,7 @@ export default function Library({ onSelect }: { onSelect: (id: number) => void }
     )
   }
 
-  const items: LibraryItem[] = data?.items ?? []
+  const items: LibraryItem[] = Array.isArray(data) ? data : []
 
   if (items.length === 0) {
     return (
@@ -58,9 +59,9 @@ export default function Library({ onSelect }: { onSelect: (id: number) => void }
             className="group relative bg-gray-800 rounded-lg overflow-hidden hover:ring-2 hover:ring-blue-500 transition-all text-left"
           >
             <div className="aspect-[2/3] bg-gray-700 flex items-center justify-center">
-              {item.thumb ? (
+              {item.thumb_url ? (
                 <img
-                  src={item.thumb}
+                  src={item.thumb_url}
                   alt={item.title}
                   className="w-full h-full object-cover"
                 />
@@ -76,9 +77,13 @@ export default function Library({ onSelect }: { onSelect: (id: number) => void }
                 )}
                 <span
                   className={`inline-block w-2.5 h-2.5 rounded-full ml-auto ${
-                    item.va_match ? 'bg-green-500' : 'bg-yellow-500'
+                    item.matched ? 'bg-green-500' : 'bg-yellow-500'
                   }`}
-                  title={item.va_match ? 'Matched' : 'Unmatched'}
+                  title={
+                    item.matched
+                      ? `Matched (${item.source || 'vidangel'})`
+                      : 'Unmatched'
+                  }
                 />
               </div>
             </div>

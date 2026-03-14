@@ -16,13 +16,15 @@ def store_item(
     imdb_id: str | None = None,
     media_type: str = "movie",
     thumb_url: str | None = None,
+    media_path: str | None = None,
+    duration_sec: float | None = None,
 ) -> None:
     """Insert or update a library item keyed on plex_key."""
     db = get_db()
     db.execute(
         """
-        INSERT INTO library (plex_key, title, year, tmdb_id, imdb_id, media_type, thumb_url, last_scanned)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO library (plex_key, title, year, tmdb_id, imdb_id, media_type, thumb_url, media_path, duration_sec, last_scanned)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(plex_key) DO UPDATE SET
             title = excluded.title,
             year = excluded.year,
@@ -30,6 +32,8 @@ def store_item(
             imdb_id = excluded.imdb_id,
             media_type = excluded.media_type,
             thumb_url = excluded.thumb_url,
+            media_path = excluded.media_path,
+            duration_sec = excluded.duration_sec,
             last_scanned = excluded.last_scanned
         """,
         (
@@ -40,6 +44,8 @@ def store_item(
             imdb_id,
             media_type,
             thumb_url,
+            media_path,
+            duration_sec,
             datetime.now(timezone.utc).isoformat(),
         ),
     )
@@ -85,6 +91,9 @@ def scan_plex() -> int:
     for movie in movies_section.all():
         guid_strings = [g.id for g in movie.guids]
         ids = extract_guids(guid_strings)
+        media_path = None
+        if movie.media and movie.media[0].parts:
+            media_path = movie.media[0].parts[0].file
         store_item(
             plex_key=str(movie.ratingKey),
             title=movie.title,
@@ -93,6 +102,8 @@ def scan_plex() -> int:
             imdb_id=ids.get("imdb_id"),
             media_type="movie",
             thumb_url=movie.thumb,
+            media_path=media_path,
+            duration_sec=(movie.duration / 1000.0) if movie.duration else None,
         )
         count += 1
     return count

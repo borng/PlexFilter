@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     local_detection_enabled: bool = True
     local_detection_sample_interval_sec: float = 1.0
     local_detection_merge_gap_sec: float = 1.5
-    local_detection_nudenet_threshold: float = 0.55
+    local_detection_nudenet_threshold: float = 0.40
     local_detection_stage1_model: str = "freepik"
     local_detection_stage1_severity: str = "medium"
     local_detection_stage1_min_vram_gb: float = 3.5

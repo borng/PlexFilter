@@ -22,6 +22,8 @@ def init_db():
             imdb_id TEXT,
             media_type TEXT NOT NULL DEFAULT 'movie',
             thumb_url TEXT,
+            media_path TEXT,
+            duration_sec REAL,
             last_scanned TEXT
         );
 
@@ -43,6 +45,7 @@ def init_db():
             library_id INTEGER NOT NULL REFERENCES library(id) UNIQUE,
             vidangel_work_id INTEGER NOT NULL,
             tag_set_id INTEGER NOT NULL,
+            source TEXT NOT NULL DEFAULT 'vidangel',
             match_method TEXT NOT NULL DEFAULT 'tmdb',
             tag_count INTEGER DEFAULT 0,
             last_synced TEXT
@@ -63,4 +66,24 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_tags_category ON tags(category_group);
         CREATE INDEX IF NOT EXISTS idx_matches_library ON matches(library_id);
     """)
+    _migrate_schema(db)
     db.close()
+
+
+def _migrate_schema(db: sqlite3.Connection) -> None:
+    """Best-effort additive migrations for existing DBs."""
+    library_cols = {
+        row["name"] for row in db.execute("PRAGMA table_info(library)").fetchall()
+    }
+    if "media_path" not in library_cols:
+        db.execute("ALTER TABLE library ADD COLUMN media_path TEXT")
+    if "duration_sec" not in library_cols:
+        db.execute("ALTER TABLE library ADD COLUMN duration_sec REAL")
+
+    matches_cols = {
+        row["name"] for row in db.execute("PRAGMA table_info(matches)").fetchall()
+    }
+    if "source" not in matches_cols:
+        db.execute("ALTER TABLE matches ADD COLUMN source TEXT DEFAULT 'vidangel'")
+
+    db.commit()

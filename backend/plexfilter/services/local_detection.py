@@ -33,7 +33,7 @@ _LABEL_TO_CATEGORY = {
     "MALE_GENITALIA_EXPOSED": "Male Genital Nudity",
     "BUTTOCKS_EXPOSED": "Buttocks Nudity",
     "ANUS_EXPOSED": "Explicit Nudity",
-    "FEMALE_BREAST_COVERED": "Suggestive",
+    "FEMALE_BREAST_COVERED": "Female Nudity",
     "FEMALE_GENITALIA_COVERED": "Suggestive",
     "BUTTOCKS_COVERED": "Suggestive",
     "ANUS_COVERED": "Suggestive",

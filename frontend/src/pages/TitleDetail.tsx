@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '../api'
 import Timeline from '../components/Timeline'
 
@@ -30,11 +30,21 @@ interface LibraryDetail {
   // match fields (may be null when unmatched)
   vidangel_work_id: number | null
   tag_set_id: number | null
+  source?: string | null
   tag_count: number | null
   match_method?: string | null
   last_synced: string | null
   matched: number   // 0 or 1
   tags: Tag[]
+}
+
+interface LocalDetectionResult {
+  matched: boolean
+  tag_count: number
+  segment_count?: number
+  pipeline_mode?: string
+  frames_extracted?: number
+  frames_stage1_candidates?: number
 }
 
 // ── Helpers ─────────────────────────────────────────────────────────────
@@ -54,9 +64,17 @@ const TYPE_BADGE_COLORS: Record<string, string> = {
 // ── Component ───────────────────────────────────────────────────────────
 
 export default function TitleDetail({ id, onBack }: { id: number; onBack: () => void }) {
+  const queryClient = useQueryClient()
   const { data: item, isLoading, error } = useQuery<LibraryDetail>({
     queryKey: ['library', id],
     queryFn: () => api.libraryItem(id),
+  })
+  const localDetect = useMutation<LocalDetectionResult>({
+    mutationFn: () => api.localDetectSingle(id),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ['library'] })
+      await queryClient.invalidateQueries({ queryKey: ['library', id] })
+    },
   })
 
   // Loading state
@@ -124,13 +142,35 @@ export default function TitleDetail({ id, onBack }: { id: number; onBack: () => 
         <div className="text-sm text-gray-400 space-y-1">
           <p>
             <span className="text-green-400 font-medium">Matched</span>
-            {item.match_method && <> via <span className="text-gray-300">{item.match_method}</span></>}
+            {item.source && <> from <span className="text-gray-300">{item.source}</span></>}
+            {item.match_method && <> using <span className="text-gray-300">{item.match_method}</span></>}
           </p>
           <p>{item.tag_count ?? item.tags.length} tags found</p>
         </div>
       ) : (
-        <div className="bg-yellow-900/40 border border-yellow-700 text-yellow-300 rounded-lg px-4 py-3 text-sm">
-          Not matched with VidAngel — no filter data available for this title.
+        <div className="bg-yellow-900/40 border border-yellow-700 text-yellow-300 rounded-lg px-4 py-3 text-sm space-y-3">
+          <p>Not matched with VidAngel — local nudity detection can generate fallback timestamps.</p>
+          <button
+            onClick={() => localDetect.mutate()}
+            disabled={localDetect.isPending}
+            className="px-3 py-1.5 bg-yellow-700 text-yellow-100 rounded hover:bg-yellow-600 disabled:opacity-50"
+          >
+            {localDetect.isPending ? 'Running local detection...' : 'Run Local Detection'}
+          </button>
+          {localDetect.isError && (
+            <p className="text-red-300">Local detection failed. Verify ffmpeg and nudenet are installed.</p>
+          )}
+          {localDetect.data?.matched && (
+            <p className="text-yellow-100">
+              Detection complete: {localDetect.data.tag_count} tag(s)
+              {typeof localDetect.data.segment_count === 'number' && ` across ${localDetect.data.segment_count} segment(s)`}
+              {localDetect.data.pipeline_mode && ` via ${localDetect.data.pipeline_mode === 'two_stage' ? 'Freepik + NudeNet' : 'NudeNet-only'}`}
+              {typeof localDetect.data.frames_extracted === 'number' &&
+                typeof localDetect.data.frames_stage1_candidates === 'number' &&
+                ` (${localDetect.data.frames_stage1_candidates}/${localDetect.data.frames_extracted} frames sent to NudeNet)`}
+              .
+            </p>
+          )}
         </div>
       )}
 

@@ -17,6 +17,7 @@ def list_library(limit: int = 50, offset: int = 0):
             SELECT l.*,
                    m.vidangel_work_id,
                    m.tag_set_id,
+                   m.source,
                    m.tag_count,
                    m.last_synced,
                    CASE WHEN m.id IS NOT NULL THEN 1 ELSE 0 END AS matched
@@ -42,6 +43,7 @@ def get_library_item(library_id: int):
             SELECT l.*,
                    m.vidangel_work_id,
                    m.tag_set_id,
+                   m.source,
                    m.tag_count,
                    m.last_synced,
                    CASE WHEN m.id IS NOT NULL THEN 1 ELSE 0 END AS matched

@@ -26,11 +26,12 @@ export default function Settings() {
       await api.plexScan()
 
       setStatus('syncing')
-      setMessage('Syncing VidAngel filters...')
+      setMessage('Syncing filters and running local fallback where needed...')
       await api.sync()
+      await waitForSyncCompletion()
 
       setStatus('done')
-      setMessage('Connected and synced successfully!')
+      setMessage('Connected and synced successfully.')
     } catch (err) {
       setStatus('error')
       setMessage(err instanceof Error ? err.message : 'Connection failed.')
@@ -38,6 +39,31 @@ export default function Settings() {
   }
 
   const isWorking = status === 'connecting' || status === 'scanning' || status === 'syncing'
+
+  async function waitForSyncCompletion() {
+    // Poll every second while backend background task is running.
+    // This keeps UX responsive during local frame analysis.
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      const syncStatus = await api.syncStatus()
+      if (!syncStatus.running) {
+        const localCount = Number(syncStatus.local_fallback_count || 0)
+        const summary = `${syncStatus.current || 0}/${syncStatus.total || 0} titles processed`
+        if (localCount > 0) {
+          setMessage(`${summary}. Local detection used for ${localCount} title(s).`)
+        } else {
+          setMessage(`${summary}.`)
+        }
+        return
+      }
+
+      const cur = Number(syncStatus.current || 0)
+      const total = Number(syncStatus.total || 0)
+      const extra = syncStatus.last_action ? ` (${syncStatus.last_action})` : ''
+      setMessage(`Syncing ${cur}/${total}${extra}...`)
+      await new Promise(resolve => setTimeout(resolve, 1000))
+    }
+  }
 
   return (
     <div className="max-w-lg">
